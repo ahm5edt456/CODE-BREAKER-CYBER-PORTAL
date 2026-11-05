@@ -1,0 +1,46 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv_*/
+venv/
+env/
+ENV/
+
+# Local player data (keep data/README.txt tracked)
+data/dashboard.json
+data/dashboard-*.tmp
+data/scores.tmp
+
+# Python build output
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+*.log
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini

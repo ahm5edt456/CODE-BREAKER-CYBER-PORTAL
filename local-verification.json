@@ -1,0 +1,73 @@
+{
+  "status": "passed",
+  "flows": [
+    {
+      "language": "Python",
+      "mode": "Debug",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed"
+    },
+    {
+      "language": "Python",
+      "mode": "Complete Code",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed"
+    },
+    {
+      "language": "Python",
+      "mode": "Predict Output",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed",
+      "predict_run_executes_code": false
+    },
+    {
+      "language": "C++",
+      "mode": "Debug",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed"
+    },
+    {
+      "language": "C++",
+      "mode": "Complete Code",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed"
+    },
+    {
+      "language": "C++",
+      "mode": "Predict Output",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed",
+      "predict_run_executes_code": false
+    },
+    {
+      "language": "Java",
+      "mode": "Debug",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed"
+    },
+    {
+      "language": "Java",
+      "mode": "Complete Code",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed"
+    },
+    {
+      "language": "Java",
+      "mode": "Predict Output",
+      "reference": "passed",
+      "run": "passed",
+      "submit": "passed",
+      "predict_run_executes_code": false
+    }
+  ],
+  "saved_player_data_unchanged": true,
+  "checked_at_utc": "2026-11-08T17:55:48.508044+00:00"
+}

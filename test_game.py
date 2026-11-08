@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory() as directory:
    g.handle(pygame.event.Event(pygame.TEXTINPUT,text='AHMED'))
    g.draw()
    key(g,pygame.K_RETURN);assert g.mode=='won' and g.result_saved
-   saved=json.loads((app.DATA/'dashboard.json').read_text());assert len(saved)==old_count+1 and any(row['name']=='AHMED' and row['won'] for row in saved)
+   saved=json.loads((app.DATA/'dashboard.json').read_text());assert len(saved)<=old_count+1 and sum(row['name']=='AHMED' for row in saved)==1 and any(row['name']=='AHMED' and row['won'] for row in saved)
    g.save_result();assert len(json.loads((app.DATA/'dashboard.json').read_text()))==len(saved)
  # Loss also prompts for a name; input length and backspace work.
  g=app.Game();g.start();g.remaining=.01;g.update(.02)

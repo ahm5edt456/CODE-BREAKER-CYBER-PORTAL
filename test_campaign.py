@@ -51,13 +51,13 @@ with tempfile.TemporaryDirectory() as folder:
  for language in ['Python','C++','Java']:
   if language=='C++' and not shutil.which('g++'):continue
   if language=='Java' and not shutil.which('javac'):continue
-  for rank in range(6):
+  for rank in range(len(TOPICS)):
    for kind in ['Debug','Complete Code']:
     q=problem(language,rank,kind,random.Random(rank+8));r=execute(q['answer'],language)
     assert not r['error'],(language,rank,r)
     bad=execute(q['code'],language);assert bad['error'] or bad['out']!=r['out']
  # Play the entire campaign by walking through real maze passages.
- g=CampaignGame();g.start();g.lives=2;topics=[]
+ g=CampaignGame();g.start();g.lives=2;topics=[];expected_topics=[TOPICS[t] for t in g.question_plan]
  for stage in range(3):
   assert g.level==stage and g.remaining==120 and g.lives==2
   assert [gate['difficulty'] for gate in g.gates.values()]==[stage*2,stage*2+1]
@@ -79,7 +79,7 @@ with tempfile.TemporaryDirectory() as folder:
    if stage==0:pygame.image.save(pygame.display.get_surface(),'preview_stage_clear.png')
    g.update(1.3);assert g.mode=='maze' and g.level==stage+1 and g.remaining==120
   else:assert g.mode=='name_entry' and g.outcome=='won' and g.correct==6
- assert topics==TOPICS
+ assert topics==expected_topics
  g.draw();g.update(.3);g.draw();g.handle(pygame.event.Event(pygame.TEXTINPUT,text='AHMED'))
  g.handle(pygame.event.Event(pygame.KEYDOWN,key=pygame.K_RETURN,mod=0))
  assert g.result_saved and json.loads((core.DATA/'dashboard.json').read_text())[0]['stages_completed']==3

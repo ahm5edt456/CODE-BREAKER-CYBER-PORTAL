@@ -1,5 +1,6 @@
 """Retained pygame_gui controls over a custom animated Cyber Portal scene."""
 import math,random
+from event_mark import EventMark
 from pathlib import Path
 import pygame
 import pygame_gui
@@ -16,6 +17,8 @@ class PortalGame(Game):
         self.ui=pygame_gui.UIManager((1280,720),str(ROOT/'assets/theme.json'),enable_live_theme_updates=False)
         self.widgets={};self.actions={};self.gui_mode=None;self.entry=None;self.clock_time=0.;self.fade=0.;self.previous=None;self.last_frame=None
         self.fonts={}
+        self.event_menu_mark=EventMark(274)
+        self.event_header_mark=EventMark(103)
         rng=random.Random(738)
         self.stars=[(rng.randrange(1280),rng.randrange(720),rng.random()*math.tau,rng.choice([1,1,2])) for _ in range(62)]
         # Stable decorative maze, generated once rather than rebuilding every frame.
@@ -97,7 +100,7 @@ class PortalGame(Game):
             brightness=int(44+21*math.sin(t*.7+phase))
             pygame.draw.circle(S,(brightness//2,brightness,brightness+18),(x,int((y+t*3)%720)),radius)
         pygame.draw.line(S,(24,48,63),(46,45),(167,45),1)
-        self.text('IEEE / CODE LAB',46,55,11,(100,144,162))
+        self.text('IEEE DAY / CODE LAB',46,55,11,(100,144,162))
         self.text('CYBER PORTAL',1080,55,11,(100,144,162))
         pygame.draw.line(S,(24,48,63),(1113,45),(1234,45),1)
     def portal(self,cx=640,cy=177,scale=1.):
@@ -116,6 +119,11 @@ class PortalGame(Game):
         for i in range(4):
             angle=t*.34+i*math.pi/2
             pygame.draw.circle(S,W,(cx+int(math.cos(angle)*r),cy+int(math.sin(angle)*r)),3)
+        if hasattr(self,'scene_art'):
+            image=self.scene_art.menu_robot
+            bob=0 if self.reduced_motion else int(math.sin(t*1.8)*4)
+            S.blit(image,(cx-64,cy-62+bob))
+            return
         cy+=int(math.sin(t*1.8)*5)
         pygame.draw.ellipse(S,(6,20,31),(cx-34,cy+48,68,10))
         pygame.draw.rect(S,(24,58,78),(cx-26,cy+6,52,39),border_radius=12)
@@ -128,18 +136,22 @@ class PortalGame(Game):
         pygame.draw.line(S,C,(cx,cy-39),(cx,cy-55),2);pygame.draw.circle(S,V,(cx,cy-59),5)
         pygame.draw.rect(S,G,(cx-8,cy+30,16,4),border_radius=2)
     def menu(self):
-        self.background();self.portal()
-        self.center_text('C O D E  B R E A K E R',292,33,W)
-        self.center_text('S Y S T E M   E S C A P E',343,12,(112,164,180))
-        self.center_text(getattr(self,'campaign_caption','Escape in 120 seconds.'),374,16,M)
-        # Keep control indices stable for the existing keyboard mappings.
+        self.background()
+        self.event_menu_mark.draw(S,503,55,self.clock_time,
+                                  animated=not getattr(self,'reduced_motion',False))
+        self.center_text('C O D E   /   C O N N E C T   /   C E L E B R A T E',114,10,(125,170,189))
+        pygame.draw.line(S,(24,59,76),(521,142),(759,142),1)
+        self.portal(640,252)
+        self.center_text('CODE BREAKER',372,38,W)
+        self.center_text('S Y S T E M   E S C A P E',426,11,(125,170,189))
+        # Keep language and action indices stable for existing keyboard navigation.
         for i,language in enumerate(['Python','Java','C++']):
-            self.button(language,(435+i*140,532,130,42),lambda language=language:setattr(self,'language',language),self.language==language)
-        self.button('PLAY',(435,423,410,65),self.start,True)
-        self.center_text('CHOOSE YOUR LANGUAGE',508,11,(100,137,156))
-        self.button('Settings',(435,601,195,42),lambda:self.go('settings'))
-        self.button('High Scores',(650,601,195,42),lambda:self.go('scores'))
-        self.center_text('ARROWS  navigate     ENTER  select     TAB  next',680,11,(99,130,149))
+            self.button(language,(435+i*140,568,130,41),lambda language=language:setattr(self,'language',language),self.language==language)
+        self.button('PLAY',(435,464,410,60),self.start,True)
+        self.center_text('CHOOSE YOUR LANGUAGE',545,10,(100,137,156))
+        self.button('Settings',(435,635,195,41),lambda:self.go('settings'))
+        self.button('High Scores',(650,635,195,41),lambda:self.go('scores'))
+
     def settings(self):
         self.background();self.center_text('MISSION SETTINGS',136,30,W)
         self.center_text('Two choices. Your way to escape.',183,15,M)
@@ -160,7 +172,7 @@ class PortalGame(Game):
         if self.entry is None:
             self.entry=UITextEntryLine(pygame.Rect(420,346,440,59),manager=self.ui,object_id='#player_name')
             self.entry.set_text_length_limit(16);self.entry.set_text(self.name);self.entry.focus()
-        self.center_text(self.notice or 'Your name / up to 16 characters',425,13,R if self.notice else M)
+        self.center_text(self.notice or '16 characters / one best score per name',425,13,R if self.notice else M)
         self.button('SAVE SCORE',(420,477,440,56),self.save_result,True)
         self.center_text('ENTER  save     ESC  skip',619,12,M)
     def scores(self):
@@ -200,4 +212,5 @@ class PortalGame(Game):
         for p in self.particles:pygame.draw.circle(S,p[5],(int(p[0]),int(p[1])),max(1,int(p[4]*3)))
         if self.fade>0 and self.previous is not None:
             self.previous.set_alpha(int(255*self.fade/.18));S.blit(self.previous,(0,0))
+        if hasattr(self,'draw_preview_overlay'):self.draw_preview_overlay()
         self.last_frame=S.copy();pygame.display.flip()

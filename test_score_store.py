@@ -22,10 +22,10 @@ with tempfile.TemporaryDirectory() as folder:
  # Preserve the previous save until the full new JSON is written successfully.
  write_scores(directory,[row('NEW',200),row()]);assert len(load_scores(directory))==2
  legacy=root/'legacy_scores.json';legacy.write_text(json.dumps([row('LEGACY')]))
- migrated=root/'migrated';assert load_scores(migrated,legacy)[0]['name']=='LEGACY'
- assert legacy.exists() and json.loads((migrated/FILENAME).read_text())[0]['name']=='LEGACY'
+ migrated=root/'migrated';assert load_scores(migrated)==[]
+ assert legacy.exists() and json.loads((migrated/FILENAME).read_text())==[]
  # Explicitly cleared local results must not be reimported from the old file.
- write_scores(migrated,[]);assert load_scores(migrated,legacy)==[]
+ write_scores(migrated,[]);assert load_scores(migrated)==[]
  (directory/FILENAME).write_text('{invalid',encoding='utf-8');bad=(directory/FILENAME).read_bytes()
  try:load_scores(directory)
  except ValueError:pass
@@ -35,4 +35,4 @@ with tempfile.TemporaryDirectory() as folder:
   try:write_scores(root/'invalid',[invalid])
   except ValueError:pass
   else:raise AssertionError('Invalid score was accepted.')
-print('PASS: JSON round-trip, Arabic names, atomic disk failure, migration, cleared records, malformed data protection.')
+print('PASS: JSON round-trip, Arabic names, atomic disk failure, fresh resets, cleared records, malformed data protection.')

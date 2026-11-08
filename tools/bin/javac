@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launch the installed OpenJDK compiler when its javac executable is absent.
+# Uses the real jdk.compiler module; all arguments and exit statuses are preserved.
+exec java -m jdk.compiler/com.sun.tools.javac.Main "$@"

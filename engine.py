@@ -167,7 +167,7 @@ class Game:
 
     def run_code(self):
         q = self.gates[self.active_gate]['question']
-        if check_answer('\n'.join(self.lines), q):
+        if check_answer('\n'.join(self.lines), q, self.language):
             self.gates[self.active_gate]['open'] = True
             self.score += 100
             self.close_editor()

@@ -4,19 +4,22 @@ import pygame,pygame_gui
 import engine as E
 from portal_ui import PortalGame,GUI_MODES
 from game import S,C,V,W,M,G,R,panel
-from campaign_questions import problem,TOPICS
+from campaign_questions import problem,TOPICS,campaign_plan,fresh_campaign
 from challenge_placement import spread_gates,distances
+from scoring import speed_bonus,BASE_POINTS,NO_HINT_BONUS
+from visual_preview import VisualPreview
+from editor_support import EditorSupport,CODE_RECT,SCROLLBAR,TEXT_X,TEXT_Y,ROW_HEIGHT,VISIBLE_ROWS
 
 GUI_MODES.update({'maze','editor','stage_clear','paused'})
 NAMES=['BOOT SEQUENCE','CONTROL FLOW','CORE RECOVERY']
 BADGE_RADIUS=14
 BADGE_BORDER=2
 
-class CampaignGame(PortalGame):
+class CampaignGame(VisualPreview,EditorSupport,PortalGame):
     def __init__(self):
-        self.manual_stage_completion=True;self.feed=[];self.stage_transition=0.;self.stage_finished=False;self.render_pos=pygame.Vector2(66,156);self.resume_mode='maze'
-        self.campaign_caption='3 stages. 6 challenges. Explore. Solve. Advance.'
-        super().__init__()
+        self.manual_stage_completion=True;self.speed_bonus_total=0;self.solve_records=[];self.feed=[];self.stage_transition=0.;self.stage_finished=False;self.render_pos=pygame.Vector2(66,156);self.resume_mode='maze'
+        self.campaign_caption='Explore. Decode. Escape.'
+        super().__init__();self.editor_init()
     def button(self,title,rect,action,active=False,color=C):
         focus=self.nav_focus
         if self.mode in ('maze','editor'):self.nav_focus=-1
@@ -27,7 +30,15 @@ class CampaignGame(PortalGame):
         if hasattr(self,'feed'):
             self.feed.append(message);self.feed=self.feed[-3:]
     def start(self):
-        self.feed=[];super().start()
+        import game as core
+        if self.admin_preview:
+            import tempfile
+            with tempfile.TemporaryDirectory() as folder:
+                self.question_plan,self.campaign_puzzles,_=fresh_campaign(self.language,self.challenge,folder)
+        else:
+            self.question_plan,self.campaign_puzzles,self.question_history=fresh_campaign(
+                self.language,self.challenge,core.DATA,getattr(self,'question_history',None))
+        self.feed=[];self.speed_bonus_total=0;self.solve_records=[];super().start()
     def start_level(self):
         old_lives=self.lives;self.sector_count=3
         E.Game.start_level(self)
@@ -37,8 +48,9 @@ class CampaignGame(PortalGame):
         self.gates={edge:{'id':i+1,'open':False} for i,edge in enumerate(edges)}
         self.render_pos=pygame.Vector2(66,156);self.move_wait=0;self.dash=0;self.dash_cooldown=0;self.auto_gate_hold=None;self.feed=[]
         for index,gate in enumerate(self.gates.values()):
+            gate['solve_seconds']=None;gate['hint_used']=False
             rank=self.level*2+index
-            gate['difficulty']=rank;gate['kind']=self.challenge;gate['question']=problem(self.language,rank,self.challenge)
+            gate['difficulty']=rank;gate['kind']=self.challenge;gate['question']=dict(self.campaign_puzzles[rank])
         reachable,_=distances(self.maze.maze,(0,0),blocked=self.gates)
         choices=[p for p in reachable if sum(p)>=3]
         self.energy=set(random.sample(choices,min(4,len(choices))))
@@ -52,14 +64,33 @@ class CampaignGame(PortalGame):
         pending=[g['id'] for g in self.gates.values() if not g['open']]
         if pending and self.gates[edge]['id']!=min(pending):
             self.notify('Solve the earlier-numbered challenge first.');return
+        if self.gates[edge]['open']:return
+        if self.gates[edge]['solve_seconds'] is None:self.gates[edge]['solve_seconds']=0.
         super().open_editor(edge)
+        self.hint=self.gates[edge]['hint_used']
+        saved=self.gates[edge].get('draft_lines')
+        if saved is not None:
+            self.lines=list(saved);self.line,self.col=self.gates[edge].get('draft_cursor',(0,0))
+        question=self.gates[edge]['question']
+        self.editor_reset(question if saved is None or saved==question['code'].split('\n') else None)
+    def close_editor(self):
+        if self.future:return
+        if self.active_gate is not None:
+            gate=self.gates[self.active_gate];gate['hint_used']=gate.get('hint_used',False) or self.hint
+            gate['draft_lines']=list(self.lines);gate['draft_cursor']=(self.line,self.col)
+        self.editor_menu=None;self.editor_dragging=self.editor_scroll_drag=False
+        super().close_editor()
     def evaluate(self,passed):
+        if self.mode!='editor' or self.active_gate is None or self.gates[self.active_gate]['open']:return
         self.attempts+=1
         if passed:
             self.celebrate(self.active_gate);self.correct+=1
-            points=100+(25 if not self.hint else 0);self.score+=points
+            gate=self.gates[self.active_gate];seconds=gate['solve_seconds'] or 0.
+            bonus=speed_bonus(seconds);self.speed_bonus_total+=bonus
+            points=BASE_POINTS+(NO_HINT_BONUS if not self.hint else 0)+bonus;self.score+=points
+            self.solve_records.append({'challenge':gate['difficulty']+1,'seconds':round(seconds,2),'speed_bonus':bonus})
             self.gates[self.active_gate]['open']=True;self.beep('ok');self.close_editor();self.flash=1.2
-            self.notify(f'GATE ONLINE / +{points} / Next challenge is in another part of the maze.')
+            self.notify(f'GATE ONLINE / +{points} points / SPEED +{bonus} / {seconds:.1f}s')
             if self.all_open():self.complete_stage()
         else:
             self.lives-=1;self.beep('bad');self.flash=2.5
@@ -75,8 +106,11 @@ class CampaignGame(PortalGame):
     def all_open(self):return bool(self.gates) and all(g['open'] for g in self.gates.values())
     def begin_name_entry(self):
         super().begin_name_entry()
+        if self.pending_result is None:return
         self.pending_result['difficulty']=max(0,self.correct-1)
         self.pending_result['stages_completed']=3 if self.outcome=='won' else self.level
+        self.pending_result['speed_bonus']=self.speed_bonus_total
+        self.pending_result['solve_times']=[dict(record) for record in self.solve_records]
     def pause(self):
         if self.future:
             self.notify('Please wait for the current code run.');return
@@ -87,7 +121,19 @@ class CampaignGame(PortalGame):
     def next_stage(self):
         if self.mode!='stage_clear':return
         self.level+=1;self.start_level()
+    def edit(self,event):
+        if self.editor_key(event):return
+        super().edit(event)
+        if self.mode=='editor':self.editor_reveal()
+    def reset_code(self):
+        if self.future:return
+        super().reset_code();self.editor_reset(self.gates[self.active_gate]['question'])
+    def run_code(self,submit=True):
+        self.editor_menu=None;self.editor_dragging=self.editor_scroll_drag=False
+        super().run_code(submit)
     def handle(self,event):
+        if self.handle_preview_key(event):return
+        if self.mode=='editor' and self.editor_mouse(event):return
         if event.type==pygame.KEYDOWN:
             if self.mode=='maze' and event.key==pygame.K_e:
                 candidate=E.Game.nearby_gate(self)
@@ -105,6 +151,10 @@ class CampaignGame(PortalGame):
             if self.mode=='maze' and event.key in (pygame.K_ESCAPE,pygame.K_p):self.pause();return
         super().handle(event)
     def update(self,dt):
+        # Resume/back cannot reset the clock; actual runner/compile time is excluded.
+        if not self.admin_preview and self.mode in ('maze','editor') and self.future is None:
+            for gate in self.gates.values():
+                if not gate['open'] and gate.get('solve_seconds') is not None:gate['solve_seconds']+=dt
         super().update(dt)
         if self.mode=='maze':
             target=pygame.Vector2(42+self.player[0]*48+24,132+self.player[1]*48+24)
@@ -131,57 +181,54 @@ class CampaignGame(PortalGame):
     def header(self):
         if self.mode not in ('maze','editor'):return
         panel((26,23,1228,76),(9,21,36),(32,59,78))
-        self.text('CODE BREAKER',45,37,23,C,bold=True)
-        self.text('CYBER PORTAL / '+self.language.upper(),46,70,10,M)
+        self.text('CODE BREAKER',45,38,21,self.stage_accent,bold=True)
+        self.text('SYSTEM ESCAPE / '+self.language.upper(),46,71,10,M)
+        pygame.draw.line(S,self.stage_accent,(45,95),(233,95),2)
         for i in range(3):
-            x=366+i*95;color=G if i<self.level else (C if i==self.level else (45,62,80))
+            x=310+i*70;color=G if i<self.level else (self.stage_accent if i==self.level else (45,62,80))
             self.number_badge(i+1,(x,59),color,color if i<=self.level else M)
-            if i<2:pygame.draw.line(S,(39,62,79),(x+22,59),(x+73,59),2)
-        self.text(f'{self.correct}/6 FIXED',638,49,15,V)
+            if i<2:pygame.draw.line(S,(39,62,79),(x+21,59),(x+49,59),2)
+        self.text(f'{self.correct}/6 FIXED',505,50,14,V)
         for i in range(3):
-            x=779+i*27;color=R if i<self.lives else (43,57,73)
+            x=640+i*27;color=R if i<self.lives else (43,57,73)
             pygame.draw.circle(S,color,(x,53),6);pygame.draw.circle(S,color,(x+9,53),6)
             pygame.draw.polygon(S,color,[(x-6,55),(x+15,55),(x+5,68)])
-        self.text(f'{int(self.remaining)//60:02}:{int(self.remaining)%60:02}',901,42,25,R if self.remaining<=20 else G,bold=True)
-        self.text(f'{self.score:04} PTS',1012,49,16,C)
+        self.text(f'{int(self.remaining)//60:02}:{int(self.remaining)%60:02}',754,42,26,R if self.remaining<=20 else G,bold=True)
+        self.text(f'{self.score:04} PTS',871,50,16,C)
+        pygame.draw.line(S,(32,59,78),(982,39),(982,83),1)
+        self.text('EVENT EDITION',1009,37,8,M)
+        self.event_header_mark.draw(S,1008,54)
         self.button('PAUSE',(1138,43,93,33),self.pause)
     def draw_maze(self):
         ox,oy=42,132
         panel((27,117,654,462),(9,23,38),(32,65,83))
         pygame.draw.rect(S,(9,26,40),(42,132,624,432))
         solved=sum(g['open'] for g in self.gates.values())
-        wall=(45,91+solved*16,112+solved*10)
-        for y,row in enumerate(self.maze.maze):
-            for x,bits in enumerate(row):
-                px,py=ox+x*48,oy+y*48
-                for flag,a,b in [(1,(px,py),(px+48,py)),(2,(px+48,py),(px+48,py+48)),(4,(px,py+48),(px+48,py+48)),(8,(px,py),(px,py+48))]:
-                    if bits&flag:
-                        pygame.draw.line(S,(12,40,54),a,b,7);pygame.draw.line(S,wall,a,b,3)
+        accent=self.stage_accent
+        self.scene_art.draw_materials(S,self.maze.maze,self.level,accent)
+        self.draw_floor_fx()
+        wall=tuple(int(c*(.38+solved*.08)) for c in accent)
+        self.scene_art.draw_lighting(S,self.render_pos,self.level,self.gates,self.energy)
+        self.scene_art.draw_walls(S)
         # There are deliberately no route dots and no visited-cell trail.
-        for x,y in self.energy:
-            cx,cy=ox+x*48+24,oy+y*48+24
-            size=6
-            pygame.draw.polygon(S,(255,207,101),[(cx,cy-size),(cx+size,cy),(cx,cy+size),(cx-size,cy)])
+        for cell in self.energy:
+            self.scene_art.draw_crystal(S,cell,self.fx_time,self.reduced_motion)
         next_id=next((g['id'] for g in self.gates.values() if not g['open']),None)
         for (a,b),gate in self.gates.items():
-            x=ox+(a[0]+b[0]+1)*24;y=oy+(a[1]+b[1]+1)*24;color=G if gate['open'] else V
+            x=ox+(a[0]+b[0]+1)*24;y=oy+(a[1]+b[1]+1)*24;color=G if gate['open'] else self.stage_accent
             self.number_badge(gate['difficulty']+1,(x,y),color)
             if gate['open']:pygame.draw.lines(S,G,False,[(x+12,y-14),(x+16,y-10),(x+23,y-18)],2)
-            elif gate['id']==next_id:pygame.draw.circle(S,V,(x,y),19+int(math.sin(self.clock_time*4)*2),1)
-        cx,cy=map(int,self.render_pos);cy+=int(math.sin(self.clock_time*4)*1.5)
-        if self.dash>0:pygame.draw.circle(S,C,(cx,cy),23,2)
-        pygame.draw.ellipse(S,(3,12,23),(cx-16,cy+12,32,9))
-        pygame.draw.rect(S,(31,79,101),(cx-12,cy-7,24,25),border_radius=7)
-        pygame.draw.rect(S,C,(cx-17,cy-18,34,25),border_radius=8)
-        pygame.draw.rect(S,(7,28,43),(cx-13,cy-14,26,16),border_radius=5)
-        for dx in [-6,6]:pygame.draw.rect(S,W,(cx+dx-2,cy-10,4,6),border_radius=2)
-        pygame.draw.line(S,C,(cx,cy-18),(cx,cy-24),2);pygame.draw.circle(S,V,(cx,cy-25),3)
+            elif gate['id']==next_id:pygame.draw.circle(S,accent,(x,y),19+(0 if self.reduced_motion else int(math.sin(self.clock_time*4)*2)),1)
+        self.scene_art.draw_actor(S,self.render_pos,self.level,self.actor_facing,
+                                  self.actor_frame,self.dash>0)
+        self.draw_maze_fx()
         panel((707,117,547,462),(9,21,36),(32,59,78))
-        self.text(f'STAGE {self.level+1} / 3',733,140,12,C)
+        self.text(f'STAGE {self.level+1} / 3',733,140,12,accent)
+        pygame.draw.rect(S,accent,(707,133,3,72),border_radius=1)
         self.text(NAMES[self.level],733,168,25,W,bold=True)
-        self.text('FIND AND SOLVE BOTH CHALLENGES',733,209,17,V)
+        self.text('FIND AND SOLVE BOTH CHALLENGES',733,209,17,accent)
         pygame.draw.rect(S,(28,47,65),(733,246,491,8),border_radius=4)
-        if solved:pygame.draw.rect(S,G,(733,246,int(491*solved/2),8),border_radius=4)
+        if self.fx_progress>.001:pygame.draw.rect(S,accent,(733,246,max(1,int(491*self.fx_progress)),8),border_radius=4)
         for index,gate in enumerate(self.gates.values()):
             y=278+index*79
             self.number_badge(gate['difficulty']+1,(747,y+14),G if gate['open'] else V)
@@ -205,7 +252,11 @@ class CampaignGame(PortalGame):
         panel((28,204,302,486),(9,21,36),(32,59,78))
         self.text('MISSION BRIEF',47,222,12,C)
         from game import wrap
-        for i,line in enumerate(wrap(q['prompt'],27)):self.text(line,47,253+i*23,15,W)
+        prompt_lines=wrap(q['prompt'],31)
+        prompt_step=min(21,94/max(1,len(prompt_lines)))
+        for i,line in enumerate(prompt_lines):self.text(line,47,253+int(i*prompt_step),14 if len(prompt_lines)<=6 else 12,W)
+        seconds=gate.get('solve_seconds') or 0.
+        self.text(f'SPEED BONUS +{speed_bonus(seconds)} / {seconds:.1f}s',47,358,12,C)
         self.text('EXPECTED OUTPUT',47,386,12,G)
         for i,line in enumerate(wrap(self.expected or '(No output)',28)[:6]):self.text(line,47,412+i*22,15,G)
         if self.hint:
@@ -215,27 +266,49 @@ class CampaignGame(PortalGame):
         self.button('RESET',(181,622,128,39),self.reset_code)
         panel((348,204,884,337),(8,19,32),(32,59,78))
         self.text('main.'+{'Python':'py','Java':'java','C++':'cpp'}[self.language],366,217,13,C)
-        font=pygame.font.SysFont('dejavusansmono',17)
-        start=max(0,self.line-10);scroll=max(0,font.size(self.lines[self.line][:self.col])[0]-773)
-        for i in range(start,min(len(self.lines),start+12)):
-            yy=247+(i-start)*23
-            self.text(f'{i+1:02}',365,yy,13,M)
-            S.set_clip(pygame.Rect(402,243,815,287));x=408-scroll
-            for part in re.findall(r'"[^"]*"|\x27[^\x27]*\x27|\b\w+\b|\s+|.',self.lines[i]):
-                color=G if part.startswith(('"',"'")) else (V if part in ['def','return','if','else','for','while','in','int','static','True','False'] else (C if part in ['print','range','cout','System'] else W))
+        font=self.editor_font
+        start=max(0,min(self.editor_top,max(0,len(self.lines)-VISIBLE_ROWS)));self.editor_top=start
+        scroll=self.editor_hscroll;selection=self.editor_selection()
+        for i in range(start,min(len(self.lines),start+VISIBLE_ROWS)):
+            yy=TEXT_Y+(i-start)*ROW_HEIGHT
+            self.text(f'{i+1:02}',365,yy,13,C if i==self.line else M)
+            S.set_clip(CODE_RECT)
+            if i==self.line:pygame.draw.rect(S,(12,30,46),(CODE_RECT.x,yy-1,CODE_RECT.w,ROW_HEIGHT))
+            if selection is not None:
+                (first,col),(last,end)=selection
+                if first<=i<=last:
+                    begin=col if i==first else 0;stop=end if i==last else len(self.lines[i])+1
+                    sx=TEXT_X-scroll+font.size(self.lines[i][:begin])[0]
+                    ex=TEXT_X-scroll+font.size(self.lines[i][:min(stop,len(self.lines[i]))])[0]+(font.size(' ')[0] if stop>len(self.lines[i]) else 0)
+                    pygame.draw.rect(S,(29,75,101),(sx,yy-1,max(2,ex-sx),ROW_HEIGHT))
+            x=TEXT_X-scroll
+            for part in re.findall(r'//.*|\#.*|"[^"]*"|\x27[^\x27]*\x27|\b\w+\b|\s+|.',self.lines[i]):
+                color=G if part.startswith(('"',"'")) else (V if part in ['def','return','if','else','for','while','in','int','static','True','False','public','class','void','String','string','boolean','bool','double','float','new','break','continue','true','false'] else (C if part in ['print','range','cout','System'] else W))
+                if part.startswith(('//','#')):color=M
+                elif part.isdigit():color=(255,207,101)
                 S.blit(font.render(part,True,color),(x,yy));x+=font.size(part)[0]
             S.set_clip(None)
-        if pygame.time.get_ticks()%1000<550:
-            cx=408-scroll+font.size(self.lines[self.line][:self.col])[0];cy=247+(self.line-start)*23
-            pygame.draw.line(S,C,(cx,cy),(cx,cy+20),2)
+        if start<=self.line<start+VISIBLE_ROWS and pygame.time.get_ticks()%1000<550:
+            S.set_clip(CODE_RECT)
+            cx=TEXT_X-scroll+font.size(self.lines[self.line][:self.col])[0];cy=TEXT_Y+(self.line-start)*ROW_HEIGHT
+            pygame.draw.line(S,C,(cx,cy),(cx,cy+20),2);S.set_clip(None)
+        pygame.draw.rect(S,(18,37,53),SCROLLBAR,border_radius=4)
+        height=max(24,int(SCROLLBAR.h*VISIBLE_ROWS/max(VISIBLE_ROWS,len(self.lines))))
+        top=SCROLLBAR.y+int((SCROLLBAR.h-height)*start/max(1,len(self.lines)-VISIBLE_ROWS))
+        pygame.draw.rect(S,(54,104,127),(SCROLLBAR.x,top,SCROLLBAR.w,height),border_radius=4)
         panel((348,559,430,131),(9,21,36),(32,59,78));panel((794,559,438,131),(9,21,36),(32,59,78))
         self.text('ACTUAL OUTPUT',365,576,12,C);self.text('ERRORS / STATUS',810,576,12,R)
         lines=wrap(self.output,47);errors=wrap(self.error or (self.message if self.flash else self.test_status),47)
         self.output_scroll=min(self.output_scroll,max(0,max(len(lines),len(errors))-3))
         for i,line in enumerate(lines[self.output_scroll:self.output_scroll+3]):self.text(line,365,605+i*23,13,W)
         for i,line in enumerate(errors[self.output_scroll:self.output_scroll+3]):self.text(line,810,605+i*23,13,R if self.error else M)
+        if self.editor_menu is not None:
+            x,y=self.editor_menu
+            for i,(title,action) in enumerate([('Copy / Ctrl+C',self.editor_copy),('Paste / Ctrl+V',self.editor_paste),('Select all / Ctrl+A',self.editor_select_all)]):
+                self.button(title,(x,y+i*38,184,36),action)
     def results(self):
-        if self.mode not in ('stage_clear','paused'):return super().results()
+        if self.mode not in ('stage_clear','paused'):
+            super().results();self.text(f'Speed bonus earned: +{self.speed_bonus_total}',72,432,16,C);return
         if self.mode=='paused':
             self.center_text('CONNECTION PAUSED',182,33,W)
             self.center_text('Your time and hearts are safe.',242,17,M)
@@ -253,8 +326,12 @@ class CampaignGame(PortalGame):
         self.sync_screen();self.buttons=[];self.background();self.header()
         if self.mode=='maze':self.draw_maze()
         else:self.draw_editor()
+        for index in list(self.widgets):
+            if index>=len(self.buttons):
+                widget=self.widgets.pop(index);self.actions.pop(widget,None);widget.kill()
         self.ui.update(0);self.ui.draw_ui(S)
         for p in self.particles:pygame.draw.circle(S,p[5],(int(p[0]),int(p[1])),max(1,int(p[4]*3)))
         if self.fade>0 and self.previous is not None:
             self.previous.set_alpha(int(255*self.fade/.18));S.blit(self.previous,(0,0))
+        self.draw_preview_overlay()
         self.last_frame=S.copy();pygame.display.flip()

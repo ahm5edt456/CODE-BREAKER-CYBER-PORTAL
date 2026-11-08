@@ -4,8 +4,8 @@ from pathlib import Path
 import pygame
 import engine as E
 from runner import execute
-from questions import pick_questions
-from score_store import load_scores,write_scores
+from campaign_questions import fresh_campaign
+from score_store import load_scores,write_scores,merge_score,clean_name
 from datetime import datetime,timezone
 
 pygame.display.set_caption('CODE BREAKER | SYSTEM ESCAPE • IEEE Edition')
@@ -38,10 +38,13 @@ class Game(E.Game):
                 a=array.array('h',(int(2300*math.sin(2*math.pi*freq*i/22050)*(1-i/4400)) for i in range(4400)))
                 self.tones[kind]=pygame.mixer.Sound(buffer=a)
         except pygame.error:self.tones={}
-        self.history_load_failed=False
-        try:self.history=load_scores(DATA,Path.home()/'.code_breaker_ieee'/'scores.json' if DATA==DEFAULT_DATA else None)
+        self.history_load_failed=False;self.score_check_wait=0.
+        self.refresh_scores()
+    def refresh_scores(self):
+        try:
+            self.history=load_scores(DATA);self.history_load_failed=False;return True
         except (OSError,ValueError):
-            self.history_load_failed=True;self.notice='Could not load data/dashboard.json. Check the file before saving.'
+            self.history_load_failed=True;self.notice='Could not load data/dashboard.json. Check the file before saving.';return False
     def beep(self,k):
         if self.sound and k in self.tones:self.tones[k].play()
     def button(self,title,rect,action,active=False,color=C):
@@ -52,6 +55,7 @@ class Game(E.Game):
         img=E.SMALL.render(title,True,color if active else W);S.blit(img,img.get_rect(center=rect.center));self.buttons.append((rect,action))
     def go(self,mode,focus=0):
         self.mode=mode;self.nav_focus=focus;self.typing=False
+        if mode=='scores':self.refresh_scores()
     def navigate(self,key,mod=0):
         count=len(self.buttons)
         if not count:return
@@ -82,25 +86,25 @@ class Game(E.Game):
             'problems_solved':self.correct,'attempts':self.attempts,'energy_collected':self.energy_count,'lives_remaining':self.lives}
         self.name='';self.notice='';self.mode='name_entry';pygame.key.start_text_input()
     def save_result(self):
-        name=self.name.strip()
+        name=clean_name(self.name)
         if not name:self.notice='Enter your name first.';return
         if self.result_saved or self.pending_result is None:return
-        if self.history_load_failed:
-            try:self.history=load_scores(DATA);self.history_load_failed=False
-            except (OSError,ValueError):
-                self.notice='Cannot save: check data/dashboard.json and folder permissions.';return
+        if not self.refresh_scores():
+            self.notice='Cannot save: check data/dashboard.json and folder permissions.';return
         row=dict(self.pending_result,name=name,saved_at=datetime.now(timezone.utc).isoformat(timespec='seconds'))
-        history=sorted(self.history+[row],key=lambda r:(-r['score'],-r['accuracy'],r['time']))[:30]
+        history,status=merge_score(self.history,row)
         try:
-            write_scores(DATA,history)
+            if status!='kept':write_scores(DATA,history)
         except OSError:
             self.notice='Could not save. Check folder permissions and try again.';return
-        self.history=history;self.result_saved=True;self.pending_result=None;self.notice='Score saved for '+name+'.'
+        self.history=history;self.result_saved=True;self.pending_result=None;self.notice=('Name already exists. Best score kept.' if status=='kept' else ('Personal best updated for ' if status=='updated' else 'Score saved for ')+name+'.')
         pygame.key.stop_text_input();self.go(self.outcome)
     def skip_score(self):
         self.result_saved=True;self.pending_result=None;self.notice='Score was not saved.'
         pygame.key.stop_text_input();self.go(self.outcome)
     def start(self):
+        if not hasattr(self, 'campaign_puzzles'):
+            _, self.round_puzzles, _ = fresh_campaign(self.language, self.challenge, DATA / 'legacy_questions')
         self.difficulty=0;self.quick=True;self.practice=False;self.pending_result=None;self.name=''
         self.typing=False;self.sprint=True;self.particles=[];self.energy_count=0;self.dash=self.dash_cooldown=0;self.auto_gate_hold=None
         self.sector_count=1 if self.quick and not self.practice else 3;self.level=0;self.score=0;self.elapsed=0;self.attempts=self.correct=0;self.result_saved=False;self.start_level()
@@ -118,25 +122,8 @@ class Game(E.Game):
         kinds=['Debug','Predict Output','Complete Code'];self.expected_cache={}
         for gate in self.gates.values():
             gate['difficulty']=min(gate['id']-1,2)
-            q=pick_questions(self.language,gate['difficulty'],1)[0];gate['question']=q
-            if not self.sprint and self.level==self.sector_count-1 and gate['id']==len(self.gates):
-                code={
-                    'Python':"total = 0\nfor n in range(1, 7):\n    if n % 2 == 1:\n        total += n\nprint(total)",
-                    'Java':"int total = 0;\nfor (int n = 1; n <= 6; n++) {\n    if (n % 2 == 1) { total += n; }\n}\nSystem.out.println(total);",
-                    'C++':"int total = 0;\nfor (int n = 1; n <= 6; n++) {\n    if (n % 2 == 1) { total += n; }\n}\ncout << total;"}[self.language]
-                q=dict(title='FINAL CORE / Restore the power',prompt='Sum the even numbers from 1 to 6. Print 12.',code=code,answer=code.replace('% 2 == 1','% 2 == 0'),hint='Even numbers have remainder zero when divided by 2.')
-                gate['question']=q
+            q=dict(self.round_puzzles[gate['difficulty']*2 + self.level%2]);gate['question']=q
             gate['kind']=self.challenge
-            # Method-only puzzles need an entry call to produce observable output.
-            if 'static ' in q['answer'] or (self.language=='C++' and re.search(r'(int|string)\s+\w+\([^)]*\)\s*\{',q['answer'])):
-                name=re.search(r'(?:int|string|String)\s+(\w+)\(',q['answer']).group(1)
-                args='5' if name=='doubleIt' else ('5, 10' if name=='sum' else '')
-                call=f'System.out.println({name}({args}));' if self.language=='Java' else f'cout << {name}({args});'
-                # Runner supports methods plus explicit main separately.
-                q['code']+='\n// ENTRY\n'+call;q['answer']+='\n// ENTRY\n'+call
-            if gate['kind']=='Complete Code':
-                lines=q['answer'].splitlines();idx=next((i for i,(a,b) in enumerate(zip(q['code'].splitlines(),lines)) if a!=b),0)
-                gate['missing']=lines[idx];lines[idx]='    # TODO: complete this line' if self.language=='Python' else '// TODO: complete this line';q['code']='\n'.join(lines)
             if gate['kind']=='Predict Output':q['code']=q['answer']
     def open_editor(self,gate):
         super().open_editor(gate);self.output='Press Run to execute your code.';self.error='';self.expected='Calculating reference output…';self.reference_error=False;self.choices=[];self.test_status='Ready to run';self.answer='';self.hint=False;self.output_scroll=self.code_scroll=0
@@ -148,7 +135,7 @@ class Game(E.Game):
     def run_code(self,submit=True):
         if self.future:return
         if submit and getattr(self,'reference_error',False):
-            self.notify('Reference unavailable. Check compiler installation.');self.flash=2;return
+            self.notify('Reference unavailable. Check compiler and isolation setup.');self.flash=2;return
         gate=self.gates[self.active_gate]
         if gate['kind']=='Predict Output':
             if submit and not self.answer:
@@ -241,6 +228,10 @@ class Game(E.Game):
             self.dash=.32;self.dash_cooldown=2;self.beep('step');return
         super().handle(ev)
     def update(self,dt):
+        self.score_check_wait-=dt
+        if self.score_check_wait<=0:
+            self.score_check_wait=.5
+            if not (DATA/'dashboard.json').exists():self.refresh_scores()
         if self.future and self.future.done():
             try:r=self.future.result()
             except Exception as e:r={'out':'','error':str(e)}
